@@ -288,9 +288,12 @@ async function* agentStream(
         );
 
         for await (const [message] of stream) {
-          if (AIMessage.isInstance(message) && message.tool_calls) {
-            yield { type: "agent_chunk", text: message.text, ts: Date.now() };
-            for (const toolCall of message.tool_calls) {
+          if (AIMessage.isInstance(message)) {
+            if (message.text) {
+              yield { type: "agent_chunk", text: message.text, ts: Date.now() };
+            }
+
+            for (const toolCall of message.tool_calls ?? []) {
               yield {
                 type: "tool_call",
                 id: toolCall.id ?? uuidv4(),
