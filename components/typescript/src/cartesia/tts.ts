@@ -27,9 +27,7 @@ export class CartesiaTTS {
   language: string;
   cartesiaVersion: string;
 
-  protected _bufferIterator = writableIterator<
-    VoiceAgentEvent.TTSChunk | VoiceAgentEvent.PipelineError
-  >();
+  protected _bufferIterator = writableIterator<VoiceAgentEvent.TTSChunk>();
   protected _connectionPromise: Promise<WebSocket> | null = null;
   protected _contextCounter = 0;
 
@@ -70,16 +68,8 @@ export class CartesiaTTS {
               audio: message.data,
               ts: Date.now(),
             });
-          } else if (message.done) {
-            ws.close();
           } else if (message.error) {
-            this._bufferIterator.push({
-              type: "pipeline_error",
-              stage: "tts",
-              message: `Cartesia error: ${message.error}`,
-              ts: Date.now(),
-            });
-            ws.close();
+            throw new Error(`Cartesia error: ${message.error}`);
           }
         } catch (error) {
           // TODO: better catch json parsing error
@@ -94,7 +84,6 @@ export class CartesiaTTS {
 
       ws.on("close", () => {
         this._connectionPromise = null;
-        this._bufferIterator.cancel();
       });
     });
 
@@ -144,9 +133,7 @@ export class CartesiaTTS {
     }
   }
 
-  async *receiveEvents(): AsyncGenerator<
-    VoiceAgentEvent.TTSChunk | VoiceAgentEvent.PipelineError
-  > {
+  async *receiveEvents(): AsyncGenerator<VoiceAgentEvent.TTSChunk> {
     yield* this._bufferIterator;
   }
 

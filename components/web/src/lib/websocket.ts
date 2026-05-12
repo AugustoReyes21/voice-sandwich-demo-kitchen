@@ -18,57 +18,9 @@ export interface VoiceSession {
 export function createVoiceSession(): VoiceSession {
   let ws: WebSocket | null = null;
   let ttsFinishTimeout: ReturnType<typeof setTimeout> | null = null;
-  let speechActivityTimeout: ReturnType<typeof setTimeout> | null = null;
-  let ttsFallbackTimeout: ReturnType<typeof setTimeout> | null = null;
-  let receivedTtsAudio = false;
-  let suppressTts = false;
 
   const audioCapture = createAudioCapture();
   const audioPlayback = createAudioPlayback();
-
-  function isSpeechChunk(chunk: ArrayBuffer): boolean {
-    const samples = new Int16Array(chunk);
-    if (samples.length === 0) return false;
-
-    let sumSquares = 0;
-    for (const sample of samples) {
-      const normalized = sample / 32768;
-      sumSquares += normalized * normalized;
-    }
-
-    return Math.sqrt(sumSquares / samples.length) > 0.035;
-  }
-
-  function markSpeechActivity() {
-    const now = Date.now();
-    const turn = get(currentTurn);
-
-    if (!turn.active) {
-      if (turn.turnStartTs) {
-        waterfallData.set({ ...turn });
-      }
-      currentTurn.startTurn(now);
-      currentTurn.sttStart(now);
-    }
-
-    if (speechActivityTimeout) clearTimeout(speechActivityTimeout);
-    speechActivityTimeout = setTimeout(() => {
-      const latestTurn = get(currentTurn);
-      if (latestTurn.active && !latestTurn.sttEndTs) {
-        currentTurn.finishTurn();
-      }
-    }, 1200);
-  }
-
-  function speakFallback(text: string) {
-    if (!("speechSynthesis" in window) || !text.trim()) return;
-
-    window.speechSynthesis.cancel();
-    const utterance = new SpeechSynthesisUtterance(text);
-    utterance.lang = "es-ES";
-    utterance.rate = 1;
-    window.speechSynthesis.speak(utterance);
-  }
 
   function handleEvent(event: ServerEvent) {
     const turn = get(currentTurn);
@@ -93,27 +45,7 @@ export function createVoiceSession(): VoiceSession {
         break;
 
       case "agent_chunk":
-        suppressTts = false;
-        receivedTtsAudio = false;
         currentTurn.agentChunk(event.ts, event.text);
-        break;
-
-      case "agent_end": {
-        if (ttsFallbackTimeout) clearTimeout(ttsFallbackTimeout);
-
-        ttsFallbackTimeout = setTimeout(() => {
-          const latestTurn = get(currentTurn);
-          if (!receivedTtsAudio && latestTurn.response) {
-            logs.log("Cartesia audio not received; using browser voice fallback");
-            activities.add("agent", "Agent Response", latestTurn.response);
-            speakFallback(latestTurn.response);
-          }
-        }, 2500);
-        break;
-      }
-
-      case "pipeline_error":
-        logs.log(`${event.stage.toUpperCase()} error: ${event.message}`);
         break;
 
       case "tool_call":
@@ -132,19 +64,11 @@ export function createVoiceSession(): VoiceSession {
         break;
 
       case "tts_chunk": {
-        if (suppressTts) break;
-
         const currentTurnState = get(currentTurn);
         if (!currentTurnState.ttsStartTs && currentTurnState.response) {
           activities.add("agent", "Agent Response", currentTurnState.response);
         }
         currentTurn.ttsChunk(event.ts);
-        receivedTtsAudio = true;
-        if (ttsFallbackTimeout) {
-          clearTimeout(ttsFallbackTimeout);
-          ttsFallbackTimeout = null;
-        }
-        logs.log("Playing assistant audio");
         audioPlayback.push(event.audio);
 
         // Debounce: finish turn after TTS stops
@@ -168,8 +92,6 @@ export function createVoiceSession(): VoiceSession {
   }
 
   async function start(): Promise<void> {
-    await audioPlayback.prepare();
-
     // Reset all state
     session.reset();
     currentTurn.reset();
@@ -178,9 +100,6 @@ export function createVoiceSession(): VoiceSession {
     activities.clear();
     logs.clear();
     audioPlayback.stop();
-    window.speechSynthesis?.cancel();
-    receivedTtsAudio = false;
-    suppressTts = false;
 
     session.setStatus("connecting");
 
@@ -195,18 +114,6 @@ export function createVoiceSession(): VoiceSession {
 
       try {
         await audioCapture.start((chunk) => {
-          const hasSpeech = isSpeechChunk(chunk);
-
-          if (hasSpeech) {
-            markSpeechActivity();
-          }
-
-          if (audioPlayback.isPlaying() && hasSpeech) {
-            suppressTts = true;
-            audioPlayback.stop();
-            logs.log("Interrupted assistant audio");
-          }
-
           if (ws && ws.readyState === WebSocket.OPEN) {
             ws.send(chunk);
           }
@@ -247,17 +154,8 @@ export function createVoiceSession(): VoiceSession {
       clearTimeout(ttsFinishTimeout);
       ttsFinishTimeout = null;
     }
-    if (speechActivityTimeout) {
-      clearTimeout(speechActivityTimeout);
-      speechActivityTimeout = null;
-    }
-    if (ttsFallbackTimeout) {
-      clearTimeout(ttsFallbackTimeout);
-      ttsFallbackTimeout = null;
-    }
 
     audioPlayback.stop();
-    window.speechSynthesis?.cancel();
     audioCapture.stop();
 
     if (ws) {
