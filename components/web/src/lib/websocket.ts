@@ -18,9 +18,45 @@ export interface VoiceSession {
 export function createVoiceSession(): VoiceSession {
   let ws: WebSocket | null = null;
   let ttsFinishTimeout: ReturnType<typeof setTimeout> | null = null;
+  let speechActivityTimeout: ReturnType<typeof setTimeout> | null = null;
+  let suppressTts = false;
 
   const audioCapture = createAudioCapture();
   const audioPlayback = createAudioPlayback();
+
+  function isSpeechChunk(chunk: ArrayBuffer): boolean {
+    const samples = new Int16Array(chunk);
+    if (samples.length === 0) return false;
+
+    let sumSquares = 0;
+    for (const sample of samples) {
+      const normalized = sample / 32768;
+      sumSquares += normalized * normalized;
+    }
+
+    return Math.sqrt(sumSquares / samples.length) > 0.035;
+  }
+
+  function markSpeechActivity() {
+    const now = Date.now();
+    const turn = get(currentTurn);
+
+    if (!turn.active) {
+      if (turn.turnStartTs) {
+        waterfallData.set({ ...turn });
+      }
+      currentTurn.startTurn(now);
+      currentTurn.sttStart(now);
+    }
+
+    if (speechActivityTimeout) clearTimeout(speechActivityTimeout);
+    speechActivityTimeout = setTimeout(() => {
+      const latestTurn = get(currentTurn);
+      if (latestTurn.active && !latestTurn.sttEndTs) {
+        currentTurn.finishTurn();
+      }
+    }, 1200);
+  }
 
   function handleEvent(event: ServerEvent) {
     const turn = get(currentTurn);
@@ -45,7 +81,12 @@ export function createVoiceSession(): VoiceSession {
         break;
 
       case "agent_chunk":
+        suppressTts = false;
         currentTurn.agentChunk(event.ts, event.text);
+        break;
+
+      case "pipeline_error":
+        logs.log(`${event.stage.toUpperCase()} error: ${event.message}`);
         break;
 
       case "tool_call":
@@ -64,6 +105,8 @@ export function createVoiceSession(): VoiceSession {
         break;
 
       case "tts_chunk": {
+        if (suppressTts) break;
+
         const currentTurnState = get(currentTurn);
         if (!currentTurnState.ttsStartTs && currentTurnState.response) {
           activities.add("agent", "Agent Response", currentTurnState.response);
@@ -100,6 +143,7 @@ export function createVoiceSession(): VoiceSession {
     activities.clear();
     logs.clear();
     audioPlayback.stop();
+    suppressTts = false;
 
     session.setStatus("connecting");
 
@@ -114,6 +158,18 @@ export function createVoiceSession(): VoiceSession {
 
       try {
         await audioCapture.start((chunk) => {
+          const hasSpeech = isSpeechChunk(chunk);
+
+          if (hasSpeech) {
+            markSpeechActivity();
+          }
+
+          if (audioPlayback.isPlaying() && hasSpeech) {
+            suppressTts = true;
+            audioPlayback.stop();
+            logs.log("Interrupted assistant audio");
+          }
+
           if (ws && ws.readyState === WebSocket.OPEN) {
             ws.send(chunk);
           }
@@ -153,6 +209,10 @@ export function createVoiceSession(): VoiceSession {
     if (ttsFinishTimeout) {
       clearTimeout(ttsFinishTimeout);
       ttsFinishTimeout = null;
+    }
+    if (speechActivityTimeout) {
+      clearTimeout(speechActivityTimeout);
+      speechActivityTimeout = null;
     }
 
     audioPlayback.stop();

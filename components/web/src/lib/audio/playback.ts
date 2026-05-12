@@ -5,6 +5,7 @@ export interface AudioPlayback {
   push: (pcmBase64: string) => void;
   stop: () => void;
   resetScheduling: () => void;
+  isPlaying: () => boolean;
 }
 
 export function createAudioPlayback(): AudioPlayback {
@@ -121,9 +122,14 @@ export function createAudioPlayback(): AudioPlayback {
     nextPlayTime = 0;
   }
 
+  function isPlaying(): boolean {
+    return sourceQueue.length > 0 || base64Queue.length > 0;
+  }
+
   return {
     push,
     stop,
     resetScheduling,
+    isPlaying,
   };
 }

@@ -6,11 +6,11 @@ export type AssemblyAIEncoding = "pcm_s16le" | "pcm_mulaw";
 /**
  * Speech model options for AssemblyAI streaming
  * - universal-streaming-english: English-only (default, lower latency)
- * - universal-streaming-multi: Multilingual (English, Spanish, French, German, Italian, Portuguese)
+ * - universal-streaming-multilingual: Multilingual (English, Spanish, French, German, Italian, Portuguese)
  */
 export type AssemblyAISpeechModel =
   | "universal-streaming-english"
-  | "universal-streaming-multi";
+  | "universal-streaming-multilingual";
 
 /**
  * Region options for AssemblyAI streaming API

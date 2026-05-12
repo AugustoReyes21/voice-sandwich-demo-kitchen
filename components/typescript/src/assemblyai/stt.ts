@@ -1,21 +1,30 @@
 import WebSocket from "ws";
 import { writableIterator } from "../utils";
-import type { AssemblyAISTTMessage } from "./api-types";
+import type { AssemblyAISpeechModel, AssemblyAISTTMessage } from "./api-types";
 import type { VoiceAgentEvent } from "../types";
 
 interface AssemblyAISTTOptions {
   apiKey?: string;
   sampleRate?: number;
   formatTurns?: boolean;
+  speechModel?: AssemblyAISpeechModel;
+  endOfTurnConfidenceThreshold?: number;
+  minEndOfTurnSilenceWhenConfident?: number;
+  maxTurnSilence?: number;
 }
 
 export class AssemblyAISTT {
   apiKey: string;
   sampleRate: number;
   formatTurns: boolean;
+  speechModel: AssemblyAISpeechModel;
+  endOfTurnConfidenceThreshold: number;
+  minEndOfTurnSilenceWhenConfident: number;
+  maxTurnSilence: number;
 
   protected _bufferIterator = writableIterator<VoiceAgentEvent.STTEvent>();
   protected _connectionPromise: Promise<WebSocket> | null = null;
+  protected _finalizedTurns = new Set<number>();
   protected get _connection(): Promise<WebSocket> {
     if (this._connectionPromise) {
       return this._connectionPromise;
@@ -25,6 +34,12 @@ export class AssemblyAISTT {
       const params = new URLSearchParams({
         sample_rate: this.sampleRate.toString(),
         format_turns: this.formatTurns.toString().toLowerCase(),
+        speech_model: this.speechModel,
+        end_of_turn_confidence_threshold:
+          this.endOfTurnConfidenceThreshold.toString(),
+        min_end_of_turn_silence_when_confident:
+          this.minEndOfTurnSilenceWhenConfident.toString(),
+        max_turn_silence: this.maxTurnSilence.toString(),
       });
 
       const url = `wss://streaming.assemblyai.com/v3/ws?${params.toString()}`;
@@ -41,13 +56,22 @@ export class AssemblyAISTT {
           const message: AssemblyAISTTMessage = JSON.parse(data.toString());
           if (message.type === "Begin") {
             // no-op
-          } else if (message.type === "Turn") {
-            if (message.turn_is_formatted) {
-              if (message.transcript) {
-                this._bufferIterator.push({ type: "stt_output", transcript: message.transcript, ts: Date.now() });
+          } else if (message.type === "Turn" && message.transcript) {
+            if (message.end_of_turn) {
+              if (!this._finalizedTurns.has(message.turn_order)) {
+                this._finalizedTurns.add(message.turn_order);
+                this._bufferIterator.push({
+                  type: "stt_output",
+                  transcript: message.transcript,
+                  ts: Date.now(),
+                });
               }
-            } else {
-              this._bufferIterator.push({ type: "stt_chunk", transcript: message.transcript, ts: Date.now() });
+            } else if (!message.turn_is_formatted) {
+              this._bufferIterator.push({
+                type: "stt_chunk",
+                transcript: message.transcript,
+                ts: Date.now(),
+              });
             }
           } else if (message.type === "Termination") {
             // no-op
@@ -76,7 +100,13 @@ export class AssemblyAISTT {
   constructor(options: AssemblyAISTTOptions) {
     this.apiKey = options.apiKey || process.env.ASSEMBLYAI_API_KEY || "";
     this.sampleRate = options.sampleRate || 16000;
-    this.formatTurns = options.formatTurns || true;
+    this.formatTurns = options.formatTurns ?? false;
+    this.speechModel = options.speechModel ?? "universal-streaming-multilingual";
+    this.endOfTurnConfidenceThreshold =
+      options.endOfTurnConfidenceThreshold ?? 0.4;
+    this.minEndOfTurnSilenceWhenConfident =
+      options.minEndOfTurnSilenceWhenConfident ?? 160;
+    this.maxTurnSilence = options.maxTurnSilence ?? 400;
 
     if (!this.apiKey) {
       throw new Error("AssemblyAI API key is required");
