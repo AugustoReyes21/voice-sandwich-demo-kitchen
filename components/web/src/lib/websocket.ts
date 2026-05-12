@@ -19,6 +19,8 @@ export function createVoiceSession(): VoiceSession {
   let ws: WebSocket | null = null;
   let ttsFinishTimeout: ReturnType<typeof setTimeout> | null = null;
   let speechActivityTimeout: ReturnType<typeof setTimeout> | null = null;
+  let ttsFallbackTimeout: ReturnType<typeof setTimeout> | null = null;
+  let receivedTtsAudio = false;
   let suppressTts = false;
 
   const audioCapture = createAudioCapture();
@@ -58,6 +60,16 @@ export function createVoiceSession(): VoiceSession {
     }, 1200);
   }
 
+  function speakFallback(text: string) {
+    if (!("speechSynthesis" in window) || !text.trim()) return;
+
+    window.speechSynthesis.cancel();
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.lang = "es-ES";
+    utterance.rate = 1;
+    window.speechSynthesis.speak(utterance);
+  }
+
   function handleEvent(event: ServerEvent) {
     const turn = get(currentTurn);
 
@@ -82,8 +94,23 @@ export function createVoiceSession(): VoiceSession {
 
       case "agent_chunk":
         suppressTts = false;
+        receivedTtsAudio = false;
         currentTurn.agentChunk(event.ts, event.text);
         break;
+
+      case "agent_end": {
+        if (ttsFallbackTimeout) clearTimeout(ttsFallbackTimeout);
+
+        ttsFallbackTimeout = setTimeout(() => {
+          const latestTurn = get(currentTurn);
+          if (!receivedTtsAudio && latestTurn.response) {
+            logs.log("Cartesia audio not received; using browser voice fallback");
+            activities.add("agent", "Agent Response", latestTurn.response);
+            speakFallback(latestTurn.response);
+          }
+        }, 2500);
+        break;
+      }
 
       case "pipeline_error":
         logs.log(`${event.stage.toUpperCase()} error: ${event.message}`);
@@ -112,6 +139,11 @@ export function createVoiceSession(): VoiceSession {
           activities.add("agent", "Agent Response", currentTurnState.response);
         }
         currentTurn.ttsChunk(event.ts);
+        receivedTtsAudio = true;
+        if (ttsFallbackTimeout) {
+          clearTimeout(ttsFallbackTimeout);
+          ttsFallbackTimeout = null;
+        }
         logs.log("Playing assistant audio");
         audioPlayback.push(event.audio);
 
@@ -146,6 +178,8 @@ export function createVoiceSession(): VoiceSession {
     activities.clear();
     logs.clear();
     audioPlayback.stop();
+    window.speechSynthesis?.cancel();
+    receivedTtsAudio = false;
     suppressTts = false;
 
     session.setStatus("connecting");
@@ -217,8 +251,13 @@ export function createVoiceSession(): VoiceSession {
       clearTimeout(speechActivityTimeout);
       speechActivityTimeout = null;
     }
+    if (ttsFallbackTimeout) {
+      clearTimeout(ttsFallbackTimeout);
+      ttsFallbackTimeout = null;
+    }
 
     audioPlayback.stop();
+    window.speechSynthesis?.cancel();
     audioCapture.stop();
 
     if (ws) {
