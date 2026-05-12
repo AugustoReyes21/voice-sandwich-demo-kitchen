@@ -126,6 +126,10 @@ function updateOrderStatus(orderId: string, status: OrderStatus) {
   });
 }
 
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 const addToOrder = tool(
   async ({ item, quantity }) => {
     return `Added ${quantity} x ${item} to the order.`;
@@ -208,9 +212,16 @@ async function* sttStream(
       for await (const audioChunk of audioStream) {
         await stt.sendAudio(audioChunk);
       }
+    } catch (error) {
+      passthrough.push({
+        type: "pipeline_error",
+        stage: "stt",
+        message: getErrorMessage(error),
+        ts: Date.now(),
+      });
     } finally {
       // Signal to AssemblyAI that audio streaming is complete
-      await stt.close();
+      await stt.close().catch(() => undefined);
     }
   });
 
@@ -221,8 +232,17 @@ async function* sttStream(
    * and pushing them into the passthrough iterator for downstream stages.
    */
   const consumer = iife(async () => {
-    for await (const event of stt.receiveEvents()) {
-      passthrough.push(event);
+    try {
+      for await (const event of stt.receiveEvents()) {
+        passthrough.push(event);
+      }
+    } catch (error) {
+      passthrough.push({
+        type: "pipeline_error",
+        stage: "stt",
+        message: getErrorMessage(error),
+        ts: Date.now(),
+      });
     }
   });
 
@@ -231,7 +251,7 @@ async function* sttStream(
     yield* passthrough;
   } finally {
     // Wait for the producer and consumer to complete when cleaning up
-    await Promise.all([producer, consumer]);
+    await Promise.allSettled([producer, consumer]);
   }
 }
 
@@ -258,39 +278,48 @@ async function* agentStream(
   for await (const event of eventStream) {
     yield event;
     if (event.type === "stt_output") {
-      const stream = await agent.stream(
-        { messages: [new HumanMessage(event.transcript)] },
-        {
-          configurable: { thread_id: threadId },
-          streamMode: "messages",
-        }
-      );
+      try {
+        const stream = await agent.stream(
+          { messages: [new HumanMessage(event.transcript)] },
+          {
+            configurable: { thread_id: threadId },
+            streamMode: "messages",
+          }
+        );
 
-      for await (const [message] of stream) {
-        if (AIMessage.isInstance(message) && message.tool_calls) {
-          yield { type: "agent_chunk", text: message.text, ts: Date.now() };
-          for (const toolCall of message.tool_calls) {
+        for await (const [message] of stream) {
+          if (AIMessage.isInstance(message) && message.tool_calls) {
+            yield { type: "agent_chunk", text: message.text, ts: Date.now() };
+            for (const toolCall of message.tool_calls) {
+              yield {
+                type: "tool_call",
+                id: toolCall.id ?? uuidv4(),
+                name: toolCall.name,
+                args: toolCall.args,
+                ts: Date.now(),
+              };
+            }
+          }
+          if (ToolMessage.isInstance(message)) {
             yield {
-              type: "tool_call",
-              id: toolCall.id ?? uuidv4(),
-              name: toolCall.name,
-              args: toolCall.args,
+              type: "tool_result",
+              toolCallId: message.tool_call_id ?? "",
+              name: message.name ?? "unknown",
+              result:
+                typeof message.content === "string"
+                  ? message.content
+                  : JSON.stringify(message.content),
               ts: Date.now(),
             };
           }
         }
-        if (ToolMessage.isInstance(message)) {
-          yield {
-            type: "tool_result",
-            toolCallId: message.tool_call_id ?? "",
-            name: message.name ?? "unknown",
-            result:
-              typeof message.content === "string"
-                ? message.content
-                : JSON.stringify(message.content),
-            ts: Date.now(),
-          };
-        }
+      } catch (error) {
+        yield {
+          type: "pipeline_error",
+          stage: "agent",
+          message: getErrorMessage(error),
+          ts: Date.now(),
+        };
       }
 
       // Signal that the agent has finished responding for this turn
@@ -347,9 +376,16 @@ async function* ttsStream(
           buffer = [];
         }
       }
+    } catch (error) {
+      passthrough.push({
+        type: "pipeline_error",
+        stage: "tts",
+        message: getErrorMessage(error),
+        ts: Date.now(),
+      });
     } finally {
       // Signal to Cartesia that text sending is complete
-      await tts.close();
+      await tts.close().catch(() => undefined);
     }
   });
 
@@ -360,8 +396,17 @@ async function* ttsStream(
    * and pushing them into the passthrough iterator for downstream stages.
    */
   const consumer = iife(async () => {
-    for await (const event of tts.receiveEvents()) {
-      passthrough.push(event);
+    try {
+      for await (const event of tts.receiveEvents()) {
+        passthrough.push(event);
+      }
+    } catch (error) {
+      passthrough.push({
+        type: "pipeline_error",
+        stage: "tts",
+        message: getErrorMessage(error),
+        ts: Date.now(),
+      });
     }
   });
 
@@ -370,7 +415,7 @@ async function* ttsStream(
     yield* passthrough;
   } finally {
     // Wait for the producer and consumer to complete when cleaning up
-    await Promise.all([producer, consumer]);
+    await Promise.allSettled([producer, consumer]);
   }
 }
 

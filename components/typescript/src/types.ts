@@ -187,6 +187,12 @@ export namespace VoiceAgentEvent {
      */
     audio: string;
   }
+
+  export interface PipelineError extends BaseEvent {
+    readonly type: "pipeline_error";
+    stage: "stt" | "agent" | "tts";
+    message: string;
+  }
 }
 
 /**
@@ -216,4 +222,5 @@ export type VoiceAgentEvent =
   | VoiceAgentEvent.UserInput
   | VoiceAgentEvent.STTEvent
   | VoiceAgentEvent.AgentEvent
-  | VoiceAgentEvent.TTSChunk;
+  | VoiceAgentEvent.TTSChunk
+  | VoiceAgentEvent.PipelineError;
