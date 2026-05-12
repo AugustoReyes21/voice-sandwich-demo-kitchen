@@ -95,7 +95,7 @@ export class CartesiaTTS {
     if (!this.apiKey) {
       throw new Error("Cartesia API key is required");
     }
-    this.voiceId = options.voiceId ?? "f6ff7c0c-e396-40a9-a70b-f7607edb6937";
+    this.voiceId = options.voiceId ?? "15d0c2e2-8d29-44c3-be23-d585d5f154a1";
     this.modelId = options.modelId ?? "sonic-3";
     this.sampleRate = options.sampleRate ?? 24000;
     this.encoding = options.encoding ?? "pcm_s16le";
