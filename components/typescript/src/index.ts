@@ -81,6 +81,20 @@ function getOrdersSnapshot(): KitchenOrder[] {
     .map(serializeOrder);
 }
 
+function getLatestOrder(): KitchenOrder | undefined {
+  return getOrdersSnapshot().at(-1);
+}
+
+function getStatusLabel(status: OrderStatus): string {
+  const labels: Record<OrderStatus, string> = {
+    new: "nuevo",
+    preparing: "en preparacion",
+    ready: "listo",
+  };
+
+  return labels[status];
+}
+
 function broadcastKitchenEvent(event: KitchenServerEvent) {
   const payload = JSON.stringify(event);
   for (const ws of kitchenSockets) {
@@ -224,12 +238,42 @@ const confirmOrder = tool(
   }
 );
 
+const getOrderStatus = tool(
+  async ({ orderId }) => {
+    const normalizedOrderId =
+      typeof orderId === "string" && orderId.trim()
+        ? orderId.trim().toUpperCase()
+        : "";
+    const order = normalizedOrderId
+      ? orders.get(normalizedOrderId)
+      : getLatestOrder();
+
+    if (!order) {
+      return "No hay pedidos registrados en cocina todavia.";
+    }
+
+    return `El pedido ${order.id} esta ${getStatusLabel(order.status)}. Resumen: ${order.summary}.`;
+  },
+  {
+    name: "get_order_status",
+    description:
+      "Check the current kitchen status for a specific order ID, or the latest order if no ID is provided.",
+    schema: z.object({
+      orderId: z
+        .string()
+        .optional()
+        .describe("Order ID, for example ORD-001. Leave empty for latest order."),
+    }),
+  }
+);
+
 const systemPrompt = `
 Eres una asistente de voz profesional, clara y amable.
 Responde en español por defecto, salvo que el usuario te pida otro idioma.
 Tu trabajo principal es tomar pedidos para una tienda de sandwiches.
 Usa add_to_order cuando el cliente agregue productos o ingredientes al pedido.
 Usa confirm_order solo cuando el cliente confirme que el pedido esta listo para enviarse a cocina.
+Usa get_order_status cuando el cliente pregunte por el estado de su pedido en cocina. Si no da identificador, consulta el pedido mas reciente.
 Antes de confirmar, resume el pedido y pide una confirmacion breve si todavia no la recibiste.
 Sé breve: responde en una o tres frases, y evita hablar demasiado.
 Si necesitas más información, haz una sola pregunta clara.
@@ -242,7 +286,7 @@ ${CARTESIA_TTS_SYSTEM_PROMPT}
 
 const agent = createAgent({
   model: "openai:gpt-4o-mini",
-  tools: [addToOrder, confirmOrder],
+  tools: [addToOrder, confirmOrder, getOrderStatus],
   checkpointer: new MemorySaver(),
   systemPrompt: systemPrompt,
 });
