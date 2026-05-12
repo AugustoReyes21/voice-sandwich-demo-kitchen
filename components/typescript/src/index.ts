@@ -1,6 +1,6 @@
 import "dotenv/config";
 import { fileURLToPath } from "node:url";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { createAgent, AIMessage, ToolMessage } from "langchain";
 import path from "node:path";
 import { Hono } from "hono";
@@ -38,6 +38,94 @@ const { injectWebSocket, upgradeWebSocket } = createNodeWebSocket({ app });
 
 app.use("/*", cors());
 
+type OrderStatus = "new" | "preparing" | "ready";
+
+interface KitchenOrder {
+  id: string;
+  items: string[];
+  summary: string;
+  status: OrderStatus;
+  createdAt: string;
+  updatedAt: string;
+}
+
+type KitchenClientMessage = {
+  type: "update_order_status";
+  orderId: string;
+  status: OrderStatus;
+};
+
+type KitchenServerEvent =
+  | { type: "orders_snapshot"; orders: KitchenOrder[]; ts: number }
+  | { type: "order_created"; order: KitchenOrder; ts: number }
+  | { type: "order_updated"; order: KitchenOrder; ts: number };
+
+const orders = new Map<string, KitchenOrder>();
+const kitchenSockets = new Set<WSContext<WebSocket>>();
+
+function parseOrderItems(orderSummary: string): string[] {
+  return orderSummary
+    .split(/\n|,|;/)
+    .map((item) => item.replace(/^[-*\d.)\s]+/, "").trim())
+    .filter(Boolean);
+}
+
+function serializeOrder(order: KitchenOrder): KitchenOrder {
+  return { ...order, items: [...order.items] };
+}
+
+function getOrdersSnapshot(): KitchenOrder[] {
+  return [...orders.values()]
+    .sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt))
+    .map(serializeOrder);
+}
+
+function broadcastKitchenEvent(event: KitchenServerEvent) {
+  const payload = JSON.stringify(event);
+  for (const ws of kitchenSockets) {
+    ws.send(payload);
+  }
+}
+
+function createKitchenOrder(orderSummary: string): KitchenOrder {
+  const now = new Date().toISOString();
+  const orderNumber = orders.size + 1;
+  const order: KitchenOrder = {
+    id: `ORD-${orderNumber.toString().padStart(3, "0")}`,
+    items: parseOrderItems(orderSummary),
+    summary: orderSummary,
+    status: "new",
+    createdAt: now,
+    updatedAt: now,
+  };
+
+  if (order.items.length === 0) {
+    order.items = [orderSummary];
+  }
+
+  orders.set(order.id, order);
+  broadcastKitchenEvent({
+    type: "order_created",
+    order: serializeOrder(order),
+    ts: Date.now(),
+  });
+
+  return order;
+}
+
+function updateOrderStatus(orderId: string, status: OrderStatus) {
+  const order = orders.get(orderId);
+  if (!order) return;
+
+  order.status = status;
+  order.updatedAt = new Date().toISOString();
+  broadcastKitchenEvent({
+    type: "order_updated",
+    order: serializeOrder(order),
+    ts: Date.now(),
+  });
+}
+
 const addToOrder = tool(
   async ({ item, quantity }) => {
     return `Added ${quantity} x ${item} to the order.`;
@@ -54,7 +142,8 @@ const addToOrder = tool(
 
 const confirmOrder = tool(
   async ({ orderSummary }) => {
-    return `Order confirmed: ${orderSummary}. Sending to kitchen.`;
+    const order = createKitchenOrder(orderSummary);
+    return `Pedido ${order.id} confirmado y enviado a cocina: ${orderSummary}.`;
   },
   {
     name: "confirm_order",
@@ -66,18 +155,23 @@ const confirmOrder = tool(
 );
 
 const systemPrompt = `
-You are a helpful sandwich shop assistant. Your goal is to take the user's order.
-Be concise and friendly.
+Eres una asistente de voz profesional, clara y amable.
+Responde en español por defecto, salvo que el usuario te pida otro idioma.
+Tu trabajo principal es tomar pedidos para una tienda de sandwiches.
+Usa add_to_order cuando el cliente agregue productos o ingredientes al pedido.
+Usa confirm_order solo cuando el cliente confirme que el pedido esta listo para enviarse a cocina.
+Antes de confirmar, resume el pedido y pide una confirmacion breve si todavia no la recibiste.
+Sé breve: responde en una o tres frases, y evita hablar demasiado.
+Si necesitas más información, haz una sola pregunta clara.
+No inventes datos. Si no sabes algo, dilo de forma profesional.
 
-Available toppings: lettuce, tomato, onion, pickles, mayo, mustard.
-Available meats: turkey, ham, roast beef.
-Available cheeses: swiss, cheddar, provolone.
+Para la voz, usa un estilo sereno, seguro y profesional. Evita sonar exagerada, infantil o demasiado casual.
 
 ${CARTESIA_TTS_SYSTEM_PROMPT}
 `;
 
 const agent = createAgent({
-  model: "claude-haiku-4-5",
+  model: "openai:gpt-4o-mini",
   tools: [addToOrder, confirmOrder],
   checkpointer: new MemorySaver(),
   systemPrompt: systemPrompt,
@@ -224,7 +318,8 @@ async function* ttsStream(
   eventStream: AsyncIterable<VoiceAgentEvent>
 ): AsyncGenerator<VoiceAgentEvent> {
   const tts = new CartesiaTTS({
-    voiceId: "f6ff7c0c-e396-40a9-a70b-f7607edb6937",
+    voiceId: "15d0c2e2-8d29-44c3-be23-d585d5f154a1",
+    language: "es",
   });
   const passthrough = writableIterator<VoiceAgentEvent>();
 
@@ -278,6 +373,43 @@ async function* ttsStream(
     await Promise.all([producer, consumer]);
   }
 }
+
+app.get(
+  "/kitchen-ws",
+  upgradeWebSocket(() => {
+    return {
+      onOpen(_, ws) {
+        kitchenSockets.add(ws);
+        ws.send(
+          JSON.stringify({
+            type: "orders_snapshot",
+            orders: getOrdersSnapshot(),
+            ts: Date.now(),
+          } satisfies KitchenServerEvent)
+        );
+      },
+      onMessage(event) {
+        if (typeof event.data !== "string") return;
+
+        try {
+          const message = JSON.parse(event.data) as KitchenClientMessage;
+          if (message.type === "update_order_status") {
+            updateOrderStatus(message.orderId, message.status);
+          }
+        } catch (err) {
+          console.error("Invalid kitchen message", err);
+        }
+      },
+      onClose(_, ws) {
+        kitchenSockets.delete(ws);
+      },
+    };
+  })
+);
+
+app.get("/kitchen", (c) =>
+  c.html(readFileSync(path.join(STATIC_DIR, "index.html"), "utf8"))
+);
 
 app.get("/*", serveStatic({ root: STATIC_DIR }));
 

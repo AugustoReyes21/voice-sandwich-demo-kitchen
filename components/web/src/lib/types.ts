@@ -4,6 +4,12 @@ export type ServerEvent =
   | { type: "stt_output"; ts: number; transcript: string }
   | { type: "agent_chunk"; ts: number; text: string }
   | {
+      type: "pipeline_error";
+      ts: number;
+      stage: "stt" | "agent" | "tts";
+      message: string;
+    }
+  | {
       type: "tool_call";
       ts: number;
       name: string;
@@ -60,3 +66,19 @@ export interface LogEntry {
   message: string;
   timestamp: Date;
 }
+
+export type OrderStatus = "new" | "preparing" | "ready";
+
+export interface KitchenOrder {
+  id: string;
+  items: string[];
+  summary: string;
+  status: OrderStatus;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type KitchenServerEvent =
+  | { type: "orders_snapshot"; orders: KitchenOrder[]; ts: number }
+  | { type: "order_created"; order: KitchenOrder; ts: number }
+  | { type: "order_updated"; order: KitchenOrder; ts: number };

@@ -6,6 +6,7 @@
   "scripts": {
     "server": "tsx src/index.ts",
     "build": "tsc",
+    "typecheck": "tsc",
     "lint": "eslint ."
   },
   "dependencies": {

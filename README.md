@@ -67,6 +67,35 @@ make dev-py
 
 The app will be available at `http://localhost:8000`
 
+### Kitchen Display
+
+This project includes a real-time kitchen screen at:
+
+```bash
+http://localhost:8000/kitchen
+```
+
+Open the main experience at `http://localhost:8000` and the kitchen screen at
+`http://localhost:8000/kitchen` in another window. When the voice agent confirms
+an order with the `confirm_order` tool, the TypeScript backend stores the order
+in memory and broadcasts an `order_created` event to all connected kitchen
+clients through `/kitchen-ws`. The kitchen screen receives the event immediately,
+without refreshing the page.
+
+Kitchen staff can move each order through these states:
+
+- `nuevo`
+- `en preparacion`
+- `listo`
+
+Changing the state sends an `update_order_status` event through the same
+WebSocket. The backend updates the order and broadcasts `order_updated`, so every
+open kitchen screen stays synchronized.
+
+To test the real-time flow, keep `/kitchen` open while confirming an order from
+the main voice experience. The order should appear in the kitchen screen without
+refreshing the page.
+
 ### Manual Setup
 
 #### TypeScript
@@ -125,3 +154,22 @@ The pipeline communicates via a unified event stream:
 | `tool_result` | Agent → Client | Tool execution result |
 | `agent_end` | Agent → TTS | Signals end of agent turn |
 | `tts_chunk` | TTS → Client | Audio chunk for playback |
+
+## Kitchen Architecture
+
+The kitchen extension keeps the original event-driven architecture:
+
+1. The customer confirms a sandwich order in the main voice experience.
+2. The LangChain tool `confirm_order` calls the backend order registry.
+3. The backend creates an order with an ID, items, timestamp, and `new` status.
+4. The backend emits `order_created` over `/kitchen-ws`.
+5. The Svelte `/kitchen` route updates its order columns automatically.
+6. Status buttons emit `update_order_status`; the backend responds with
+   `order_updated` for all connected kitchen clients.
+
+Technologies used for this extension:
+
+- Hono WebSocket routes on the TypeScript backend
+- Svelte stores for live kitchen state
+- Tailwind CSS for the kitchen display layout
+- In-memory order storage for the demo
