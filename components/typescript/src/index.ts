@@ -62,6 +62,7 @@ type KitchenServerEvent =
 
 const orders = new Map<string, KitchenOrder>();
 const kitchenSockets = new Set<WSContext<WebSocket>>();
+const orderStatusTimers = new Map<string, ReturnType<typeof setTimeout>[]>();
 
 function parseOrderItems(orderSummary: string): string[] {
   return orderSummary
@@ -109,6 +110,7 @@ function createKitchenOrder(orderSummary: string): KitchenOrder {
     order: serializeOrder(order),
     ts: Date.now(),
   });
+  scheduleAutomaticStatusUpdates(order.id);
 
   return order;
 }
@@ -124,6 +126,31 @@ function updateOrderStatus(orderId: string, status: OrderStatus) {
     order: serializeOrder(order),
     ts: Date.now(),
   });
+}
+
+function scheduleAutomaticStatusUpdates(orderId: string) {
+  const existingTimers = orderStatusTimers.get(orderId) ?? [];
+  for (const timer of existingTimers) {
+    clearTimeout(timer);
+  }
+
+  const timers = [
+    setTimeout(() => {
+      const order = orders.get(orderId);
+      if (order?.status === "new") {
+        updateOrderStatus(orderId, "preparing");
+      }
+    }, 5000),
+    setTimeout(() => {
+      const order = orders.get(orderId);
+      if (order?.status === "preparing") {
+        updateOrderStatus(orderId, "ready");
+      }
+      orderStatusTimers.delete(orderId);
+    }, 12000),
+  ];
+
+  orderStatusTimers.set(orderId, timers);
 }
 
 function getErrorMessage(error: unknown): string {

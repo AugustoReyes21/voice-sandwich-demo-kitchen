@@ -88,9 +88,10 @@ Kitchen staff can move each order through these states:
 - `en preparacion`
 - `listo`
 
-Changing the state sends an `update_order_status` event through the same
-WebSocket. The backend updates the order and broadcasts `order_updated`, so every
-open kitchen screen stays synchronized.
+The backend also advances demo orders automatically from `nuevo` to
+`en preparacion` and then to `listo`, broadcasting each `order_updated` event so
+every open kitchen screen changes in real time. Kitchen staff can still use the
+status button to update an order manually through the same WebSocket flow.
 
 To test the real-time flow, keep `/kitchen` open while confirming an order from
 the main voice experience. The order should appear in the kitchen screen without
@@ -164,8 +165,8 @@ The kitchen extension keeps the original event-driven architecture:
 3. The backend creates an order with an ID, items, timestamp, and `new` status.
 4. The backend emits `order_created` over `/kitchen-ws`.
 5. The Svelte `/kitchen` route updates its order columns automatically.
-6. Status buttons emit `update_order_status`; the backend responds with
-   `order_updated` for all connected kitchen clients.
+6. Automatic timers and status buttons emit status changes; the backend responds
+   with `order_updated` for all connected kitchen clients.
 
 Technologies used for this extension:
 
