@@ -1,7 +1,7 @@
 import "dotenv/config";
 import { fileURLToPath } from "node:url";
 import { existsSync, readFileSync } from "node:fs";
-import { createAgent, AIMessage, ToolMessage } from "langchain";
+import { createAgent, ToolMessage } from "langchain";
 import path from "node:path";
 import { Hono } from "hono";
 import { serve } from "@hono/node-server";
@@ -128,6 +128,45 @@ function updateOrderStatus(orderId: string, status: OrderStatus) {
 
 function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function getMessageText(message: unknown): string {
+  if (!message || typeof message !== "object") return "";
+
+  const candidate = message as {
+    text?: unknown;
+    content?: unknown;
+  };
+
+  if (typeof candidate.text === "string") {
+    return candidate.text;
+  }
+
+  if (typeof candidate.content === "string") {
+    return candidate.content;
+  }
+
+  if (Array.isArray(candidate.content)) {
+    return candidate.content
+      .map((part) => {
+        if (typeof part === "string") return part;
+        if (part && typeof part === "object" && "text" in part) {
+          const text = (part as { text?: unknown }).text;
+          return typeof text === "string" ? text : "";
+        }
+        return "";
+      })
+      .join("");
+  }
+
+  return "";
+}
+
+function getMessageToolCalls(message: unknown) {
+  if (!message || typeof message !== "object") return [];
+
+  const toolCalls = (message as { tool_calls?: unknown }).tool_calls;
+  return Array.isArray(toolCalls) ? toolCalls : [];
 }
 
 const addToOrder = tool(
@@ -288,12 +327,13 @@ async function* agentStream(
         );
 
         for await (const [message] of stream) {
-          if (AIMessage.isInstance(message)) {
-            if (message.text) {
-              yield { type: "agent_chunk", text: message.text, ts: Date.now() };
+          if (!ToolMessage.isInstance(message)) {
+            const text = getMessageText(message);
+            if (text) {
+              yield { type: "agent_chunk", text, ts: Date.now() };
             }
 
-            for (const toolCall of message.tool_calls ?? []) {
+            for (const toolCall of getMessageToolCalls(message)) {
               yield {
                 type: "tool_call",
                 id: toolCall.id ?? uuidv4(),
