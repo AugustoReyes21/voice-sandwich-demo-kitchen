@@ -2,6 +2,7 @@
 const SAMPLE_RATE = 24000;
 
 export interface AudioPlayback {
+  prepare: () => Promise<void>;
   push: (pcmBase64: string) => void;
   stop: () => void;
   resetScheduling: () => void;
@@ -23,6 +24,19 @@ export function createAudioPlayback(): AudioPlayback {
       audioContext.resume();
     }
     return audioContext;
+  }
+
+  async function prepare(): Promise<void> {
+    const ctx = ensureContext();
+    if (ctx.state === "suspended") {
+      await ctx.resume();
+    }
+
+    const buffer = ctx.createBuffer(1, 1, SAMPLE_RATE);
+    const source = ctx.createBufferSource();
+    source.buffer = buffer;
+    source.connect(ctx.destination);
+    source.start();
   }
 
   function pcmBase64ToArrayBuffer(pcmBase64: string): {
@@ -127,6 +141,7 @@ export function createAudioPlayback(): AudioPlayback {
   }
 
   return {
+    prepare,
     push,
     stop,
     resetScheduling,

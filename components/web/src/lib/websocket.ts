@@ -112,6 +112,7 @@ export function createVoiceSession(): VoiceSession {
           activities.add("agent", "Agent Response", currentTurnState.response);
         }
         currentTurn.ttsChunk(event.ts);
+        logs.log("Playing assistant audio");
         audioPlayback.push(event.audio);
 
         // Debounce: finish turn after TTS stops
@@ -135,6 +136,8 @@ export function createVoiceSession(): VoiceSession {
   }
 
   async function start(): Promise<void> {
+    await audioPlayback.prepare();
+
     // Reset all state
     session.reset();
     currentTurn.reset();
