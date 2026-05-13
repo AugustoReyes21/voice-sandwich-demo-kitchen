@@ -38,7 +38,7 @@ const { injectWebSocket, upgradeWebSocket } = createNodeWebSocket({ app });
 
 app.use("/*", cors());
 
-type OrderStatus = "new" | "preparing" | "ready";
+type OrderStatus = "new" | "preparing" | "ready" | "delivered";
 
 interface KitchenOrder {
   id: string;
@@ -62,7 +62,6 @@ type KitchenServerEvent =
 
 const orders = new Map<string, KitchenOrder>();
 const kitchenSockets = new Set<WSContext<WebSocket>>();
-const orderStatusTimers = new Map<string, ReturnType<typeof setTimeout>[]>();
 
 function parseOrderItems(orderSummary: string): string[] {
   return orderSummary
@@ -90,6 +89,7 @@ function getStatusLabel(status: OrderStatus): string {
     new: "nuevo",
     preparing: "en preparacion",
     ready: "listo",
+    delivered: "entregado",
   };
 
   return labels[status];
@@ -124,7 +124,6 @@ function createKitchenOrder(orderSummary: string): KitchenOrder {
     order: serializeOrder(order),
     ts: Date.now(),
   });
-  scheduleAutomaticStatusUpdates(order.id);
 
   return order;
 }
@@ -140,31 +139,6 @@ function updateOrderStatus(orderId: string, status: OrderStatus) {
     order: serializeOrder(order),
     ts: Date.now(),
   });
-}
-
-function scheduleAutomaticStatusUpdates(orderId: string) {
-  const existingTimers = orderStatusTimers.get(orderId) ?? [];
-  for (const timer of existingTimers) {
-    clearTimeout(timer);
-  }
-
-  const timers = [
-    setTimeout(() => {
-      const order = orders.get(orderId);
-      if (order?.status === "new") {
-        updateOrderStatus(orderId, "preparing");
-      }
-    }, 5000),
-    setTimeout(() => {
-      const order = orders.get(orderId);
-      if (order?.status === "preparing") {
-        updateOrderStatus(orderId, "ready");
-      }
-      orderStatusTimers.delete(orderId);
-    }, 12000),
-  ];
-
-  orderStatusTimers.set(orderId, timers);
 }
 
 function getErrorMessage(error: unknown): string {
@@ -252,7 +226,11 @@ const getOrderStatus = tool(
       return "No hay pedidos registrados en cocina todavia.";
     }
 
-    return `El pedido ${order.id} esta ${getStatusLabel(order.status)}. Resumen: ${order.summary}.`;
+    if (order.status === "delivered") {
+      return `Aca esta tu pedido ${order.id}. Lleva: ${order.items.join(", ")}.`;
+    }
+
+    return `El pedido ${order.id} esta ${getStatusLabel(order.status)}. Lleva: ${order.items.join(", ")}.`;
   },
   {
     name: "get_order_status",
@@ -274,6 +252,7 @@ Tu trabajo principal es tomar pedidos para una tienda de sandwiches.
 Usa add_to_order cuando el cliente agregue productos o ingredientes al pedido.
 Usa confirm_order solo cuando el cliente confirme que el pedido esta listo para enviarse a cocina.
 Usa get_order_status cuando el cliente pregunte por el estado de su pedido en cocina. Si no da identificador, consulta el pedido mas reciente.
+Si get_order_status indica que el pedido fue entregado, responde diciendo "Aca esta tu pedido", el numero del pedido y lo que lleva.
 Antes de confirmar, resume el pedido y pide una confirmacion breve si todavia no la recibiste.
 Sé breve: responde en una o tres frases, y evita hablar demasiado.
 Si necesitas más información, haz una sola pregunta clara.

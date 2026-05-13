@@ -13,19 +13,23 @@
     new: "nuevo",
     preparing: "en preparacion",
     ready: "listo",
+    delivered: "entregado",
   };
 
-  const nextStatus: Record<OrderStatus, OrderStatus> = {
+  const nextStatus: Partial<Record<OrderStatus, OrderStatus>> = {
     new: "preparing",
     preparing: "ready",
-    ready: "new",
+    ready: "delivered",
   };
 
   const statusClasses: Record<OrderStatus, string> = {
     new: "bg-amber-100 text-amber-900 border-amber-200",
     preparing: "bg-sky-100 text-sky-900 border-sky-200",
     ready: "bg-emerald-100 text-emerald-900 border-emerald-200",
+    delivered: "bg-zinc-200 text-zinc-900 border-zinc-300",
   };
+
+  const columns: OrderStatus[] = ["new", "preparing", "ready", "delivered"];
 
   function formatTime(value: string) {
     return new Intl.DateTimeFormat("es-GT", {
@@ -64,18 +68,18 @@
       </div>
     </header>
 
-    <div class="grid gap-4 lg:grid-cols-3">
-      {#each ["new", "preparing", "ready"] as status}
+    <div class="grid gap-4 xl:grid-cols-4">
+      {#each columns as status}
         <section class="min-h-[70vh] rounded border border-zinc-800 bg-zinc-900/80">
           <div class="flex items-center justify-between border-b border-zinc-800 px-4 py-3">
-            <h2 class="text-lg font-semibold capitalize text-white">{statusLabels[status as OrderStatus]}</h2>
+            <h2 class="text-lg font-semibold capitalize text-white">{statusLabels[status]}</h2>
             <span class="rounded-full bg-zinc-800 px-3 py-1 text-sm text-zinc-300">
-              {ordersByStatus($kitchenOrders, status as OrderStatus).length}
+              {ordersByStatus($kitchenOrders, status).length}
             </span>
           </div>
 
           <div class="flex flex-col gap-3 p-3">
-            {#each ordersByStatus($kitchenOrders, status as OrderStatus) as order (order.id)}
+            {#each ordersByStatus($kitchenOrders, status) as order (order.id)}
               <article class="rounded border border-zinc-700 bg-zinc-950 p-4 shadow-lg shadow-black/20">
                 <div class="flex items-start justify-between gap-3">
                   <div>
@@ -95,13 +99,15 @@
 
                 <p class="mt-4 text-sm leading-6 text-zinc-400">{order.summary}</p>
 
-                <button
-                  class="mt-4 w-full rounded bg-white px-4 py-3 text-sm font-semibold text-zinc-950 transition hover:bg-zinc-200 disabled:cursor-not-allowed disabled:opacity-50"
-                  disabled={!$kitchenConnected}
-                  on:click={() => updateKitchenOrderStatus(order.id, nextStatus[order.status])}
-                >
-                  Cambiar a {statusLabels[nextStatus[order.status]]}
-                </button>
+                {#if nextStatus[order.status]}
+                  <button
+                    class="mt-4 w-full rounded bg-white px-4 py-3 text-sm font-semibold text-zinc-950 transition hover:bg-zinc-200 disabled:cursor-not-allowed disabled:opacity-50"
+                    disabled={!$kitchenConnected}
+                    on:click={() => updateKitchenOrderStatus(order.id, nextStatus[order.status]!)}
+                  >
+                    {order.status === "ready" ? "Entregar pedido" : `Cambiar a ${statusLabels[nextStatus[order.status]!]}`}
+                  </button>
+                {/if}
               </article>
             {:else}
               <p class="rounded border border-dashed border-zinc-700 px-4 py-8 text-center text-sm text-zinc-500">

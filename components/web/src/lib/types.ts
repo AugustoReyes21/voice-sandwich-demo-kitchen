@@ -67,7 +67,7 @@ export interface LogEntry {
   timestamp: Date;
 }
 
-export type OrderStatus = "new" | "preparing" | "ready";
+export type OrderStatus = "new" | "preparing" | "ready" | "delivered";
 
 export interface KitchenOrder {
   id: string;
