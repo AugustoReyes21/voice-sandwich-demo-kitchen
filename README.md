@@ -82,6 +82,11 @@ in memory and broadcasts an `order_created` event to all connected kitchen
 clients through `/kitchen-ws`. The kitchen screen receives the event immediately,
 without refreshing the page.
 
+Each voice session keeps an active order basket on the backend. After
+`confirm_order` sends an order to kitchen, that basket is cleared, so additional
+items requested later in the same session start a new order instead of being
+mixed with products already sent to kitchen.
+
 Kitchen staff can move each order through these states:
 
 - `nuevo`

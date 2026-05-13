@@ -49,6 +49,11 @@ interface KitchenOrder {
   updatedAt: string;
 }
 
+interface SessionOrderState {
+  items: { item: string; quantity: number }[];
+  lastConfirmedOrderId?: string;
+}
+
 type KitchenClientMessage = {
   type: "update_order_status";
   orderId: string;
@@ -62,6 +67,16 @@ type KitchenServerEvent =
 
 const orders = new Map<string, KitchenOrder>();
 const kitchenSockets = new Set<WSContext<WebSocket>>();
+const sessionOrderState = new Map<string, SessionOrderState>();
+
+function getSessionOrderState(threadId: string): SessionOrderState {
+  const existing = sessionOrderState.get(threadId);
+  if (existing) return existing;
+
+  const state: SessionOrderState = { items: [] };
+  sessionOrderState.set(threadId, state);
+  return state;
+}
 
 function parseOrderItems(orderSummary: string): string[] {
   return orderSummary
@@ -93,6 +108,10 @@ function getStatusLabel(status: OrderStatus): string {
   };
 
   return labels[status];
+}
+
+function formatOrderItems(items: { item: string; quantity: number }[]): string[] {
+  return items.map(({ item, quantity }) => `${quantity} x ${item}`);
 }
 
 function broadcastKitchenEvent(event: KitchenServerEvent) {
@@ -184,66 +203,83 @@ function getMessageToolCalls(message: unknown) {
   return Array.isArray(toolCalls) ? toolCalls : [];
 }
 
-const addToOrder = tool(
-  async ({ item, quantity }) => {
-    return `Added ${quantity} x ${item} to the order.`;
-  },
-  {
-    name: "add_to_order",
-    description: "Add an item to the customer's sandwich order.",
-    schema: z.object({
-      item: z.string(),
-      quantity: z.number(),
-    }),
-  }
-);
-
-const confirmOrder = tool(
-  async ({ orderSummary }) => {
-    const order = createKitchenOrder(orderSummary);
-    return `Pedido ${order.id} confirmado y enviado a cocina: ${orderSummary}.`;
-  },
-  {
-    name: "confirm_order",
-    description: "Confirm the final order with the customer.",
-    schema: z.object({
-      orderSummary: z.string().describe("Summary of the order"),
-    }),
-  }
-);
-
-const getOrderStatus = tool(
-  async ({ orderId }) => {
-    const normalizedOrderId =
-      typeof orderId === "string" && orderId.trim()
-        ? orderId.trim().toUpperCase()
-        : "";
-    const order = normalizedOrderId
-      ? orders.get(normalizedOrderId)
-      : getLatestOrder();
-
-    if (!order) {
-      return "No hay pedidos registrados en cocina todavia.";
+function createSessionTools(threadId: string) {
+  const addToOrder = tool(
+    async ({ item, quantity }) => {
+      const state = getSessionOrderState(threadId);
+      state.items.push({ item, quantity });
+      return `Added ${quantity} x ${item} to the order.`;
+    },
+    {
+      name: "add_to_order",
+      description: "Add an item to the customer's sandwich order.",
+      schema: z.object({
+        item: z.string(),
+        quantity: z.number(),
+      }),
     }
+  );
 
-    if (order.status === "delivered") {
-      return `Aca esta tu pedido ${order.id}. Lleva: ${order.items.join(", ")}.`;
+  const confirmOrder = tool(
+    async ({ orderSummary }) => {
+      const state = getSessionOrderState(threadId);
+      const activeItems = formatOrderItems(state.items);
+      const finalSummary =
+        activeItems.length > 0 ? activeItems.join(", ") : orderSummary;
+      const order = createKitchenOrder(finalSummary);
+
+      state.items = [];
+      state.lastConfirmedOrderId = order.id;
+
+      return `Pedido ${order.id} confirmado y enviado a cocina: ${finalSummary}.`;
+    },
+    {
+      name: "confirm_order",
+      description: "Confirm the final order with the customer.",
+      schema: z.object({
+        orderSummary: z.string().describe("Summary of the order"),
+      }),
     }
+  );
 
-    return `El pedido ${order.id} esta ${getStatusLabel(order.status)}. Lleva: ${order.items.join(", ")}.`;
-  },
-  {
-    name: "get_order_status",
-    description:
-      "Check the current kitchen status for a specific order ID, or the latest order if no ID is provided.",
-    schema: z.object({
-      orderId: z
-        .string()
-        .optional()
-        .describe("Order ID, for example ORD-001. Leave empty for latest order."),
-    }),
-  }
-);
+  const getOrderStatus = tool(
+    async ({ orderId }) => {
+      const normalizedOrderId =
+        typeof orderId === "string" && orderId.trim()
+          ? orderId.trim().toUpperCase()
+          : "";
+      const state = getSessionOrderState(threadId);
+      const order = normalizedOrderId
+        ? orders.get(normalizedOrderId)
+        : state.lastConfirmedOrderId
+          ? orders.get(state.lastConfirmedOrderId)
+          : getLatestOrder();
+
+      if (!order) {
+        return "No hay pedidos registrados en cocina todavia.";
+      }
+
+      if (order.status === "delivered") {
+        return `Aca esta tu pedido ${order.id}. Lleva: ${order.items.join(", ")}.`;
+      }
+
+      return `El pedido ${order.id} esta ${getStatusLabel(order.status)}. Lleva: ${order.items.join(", ")}.`;
+    },
+    {
+      name: "get_order_status",
+      description:
+        "Check the current kitchen status for a specific order ID, or the latest order if no ID is provided.",
+      schema: z.object({
+        orderId: z
+          .string()
+          .optional()
+          .describe("Order ID, for example ORD-001. Leave empty for latest order."),
+      }),
+    }
+  );
+
+  return [addToOrder, confirmOrder, getOrderStatus];
+}
 
 const systemPrompt = `
 Eres una asistente de voz profesional, clara y amable.
@@ -251,6 +287,7 @@ Responde en español por defecto, salvo que el usuario te pida otro idioma.
 Tu trabajo principal es tomar pedidos para una tienda de sandwiches.
 Usa add_to_order cuando el cliente agregue productos o ingredientes al pedido.
 Usa confirm_order solo cuando el cliente confirme que el pedido esta listo para enviarse a cocina.
+Despues de usar confirm_order, considera ese pedido cerrado. Si el cliente pide algo mas en la misma sesion, empieza un pedido nuevo y no incluyas productos ya enviados a cocina.
 Usa get_order_status cuando el cliente pregunte por el estado de su pedido en cocina. Si no da identificador, consulta el pedido mas reciente.
 Si get_order_status indica que el pedido fue entregado, responde diciendo "Aca esta tu pedido", el numero del pedido y lo que lleva.
 Antes de confirmar, resume el pedido y pide una confirmacion breve si todavia no la recibiste.
@@ -262,13 +299,6 @@ Para la voz, usa un estilo sereno, seguro y profesional. Evita sonar exagerada, 
 
 ${CARTESIA_TTS_SYSTEM_PROMPT}
 `;
-
-const agent = createAgent({
-  model: "openai:gpt-4o-mini",
-  tools: [addToOrder, confirmOrder, getOrderStatus],
-  checkpointer: new MemorySaver(),
-  systemPrompt: systemPrompt,
-});
 
 /**
  * Transform stream: Audio (Uint8Array) → Voice Events (VoiceAgentEvent)
@@ -363,12 +393,18 @@ async function* agentStream(
   // This allows the agent to maintain conversation context across multiple turns
   // using the checkpointer (MemorySaver) configured in the agent
   const threadId = uuidv4();
+  const sessionAgent = createAgent({
+    model: "openai:gpt-4o-mini",
+    tools: createSessionTools(threadId),
+    checkpointer: new MemorySaver(),
+    systemPrompt: systemPrompt,
+  });
 
   for await (const event of eventStream) {
     yield event;
     if (event.type === "stt_output") {
       try {
-        const stream = await agent.stream(
+        const stream = await sessionAgent.stream(
           { messages: [new HumanMessage(event.transcript)] },
           {
             configurable: { thread_id: threadId },
