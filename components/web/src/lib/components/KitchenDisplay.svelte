@@ -29,7 +29,7 @@
     delivered: "bg-zinc-200 text-zinc-900 border-zinc-300",
   };
 
-  const columns: OrderStatus[] = ["new", "preparing", "ready", "delivered"];
+  const columns: OrderStatus[] = ["new", "preparing", "ready"];
 
   function formatTime(value: string) {
     return new Intl.DateTimeFormat("es-GT", {
@@ -68,7 +68,7 @@
       </div>
     </header>
 
-    <div class="grid gap-4 xl:grid-cols-4">
+    <div class="grid gap-4 lg:grid-cols-3">
       {#each columns as status}
         <section class="min-h-[70vh] rounded border border-zinc-800 bg-zinc-900/80">
           <div class="flex items-center justify-between border-b border-zinc-800 px-4 py-3">

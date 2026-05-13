@@ -97,8 +97,10 @@ Kitchen staff can move each order through these states:
 Kitchen staff update the order manually from the `/kitchen` screen. The status
 button emits `update_order_status`; the backend updates the order and broadcasts
 `order_updated`, so every open kitchen screen changes in real time. When an order
-is `listo`, the UI shows an `Entregar pedido` button that moves it to
-`entregado`.
+is `listo`, the UI shows an `Entregar pedido` button. Pressing it marks the order
+as `entregado` and removes it from the kitchen display, while the backend keeps
+the order so the voice assistant can still answer with the order number and
+items.
 
 To test the real-time flow, keep `/kitchen` open while confirming an order from
 the main voice experience. The order should appear in the kitchen screen without

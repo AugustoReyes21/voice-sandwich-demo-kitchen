@@ -9,6 +9,10 @@ let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
 function upsertOrder(order: KitchenOrder) {
   kitchenOrders.update((orders) => {
+    if (order.status === "delivered") {
+      return orders.filter((item) => item.id !== order.id);
+    }
+
     const existingIndex = orders.findIndex((item) => item.id === order.id);
     if (existingIndex === -1) {
       return [...orders, order];

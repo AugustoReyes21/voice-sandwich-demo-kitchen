@@ -95,6 +95,10 @@ function getOrdersSnapshot(): KitchenOrder[] {
     .map(serializeOrder);
 }
 
+function getVisibleKitchenOrdersSnapshot(): KitchenOrder[] {
+  return getOrdersSnapshot().filter((order) => order.status !== "delivered");
+}
+
 function getLatestOrder(): KitchenOrder | undefined {
   return getOrdersSnapshot().at(-1);
 }
@@ -557,7 +561,7 @@ app.get(
         ws.send(
           JSON.stringify({
             type: "orders_snapshot",
-            orders: getOrdersSnapshot(),
+            orders: getVisibleKitchenOrdersSnapshot(),
             ts: Date.now(),
           } satisfies KitchenServerEvent)
         );
